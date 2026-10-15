@@ -349,8 +349,8 @@ ar:{
  w2t:"تتبع لحظي",w2d:"اعرف مكان شحنتك وحالتها في أي وقت.",
  w3t:"لوحة تحكم للتاجر",w3d:"تابع أوردراتك وتحصيلاتك ومرتجعاتك في مكان واحد.",
  tr_title:"تتبّع شحنتك",tr_sub:"أدخل رقم الشحنة لمعرفة آخر حالة لها.",tr_label:"رقم الشحنة",
- tr_demo:"* نتيجة تجريبية لأغراض العرض. اربط الموقع بنظام الشحن الفعلي لديك لعرض بيانات حقيقية.",
- tr_empty:"أدخل رقم الشحنة ليظهر مسارها هنا.",tr_bad:"من فضلك أدخل رقم شحنة صحيح (6 أرقام على الأقل).",
+tr_demo:"* تظهر هنا آخر حالة مسجلة للشحنة في النظام.",
+tr_empty:"أدخل رقم الشحنة ليظهر مسارها هنا.",tr_bad:"من فضلك أدخل رقم تتبع صحيح (حروف أو أرقام أو شرطات فقط).",
  tr_status:"حالة الشحنة",
  st:["تم إنشاء الشحنة","تم استلامها من التاجر","وصلت لمركز الفرز","خرجت للتسليم","تم التسليم"],
  calc_title:"احسب تكلفة الشحن",calc_sub:"اختر المحافظتين والوزن لتعرف السعر التقريبي.",
@@ -382,9 +382,8 @@ en:{
  w2t:"Live tracking",w2d:"Know where your parcel is and its status, anytime.",
  w3t:"Merchant dashboard",w3d:"Follow orders, collections and returns in one place.",
  tr_title:"Track your shipment",tr_sub:"Enter your tracking number to see the latest status.",tr_label:"Tracking number",
- tr_demo:"* Demo result for display only. Connect your real shipping system to show live data.",
- tr_empty:"Enter a tracking number to see its journey here.",tr_bad:"Please enter a valid tracking number (6 digits or more).",
- tr_status:"Shipment status",
+tr_demo:"* The latest status recorded for this shipment will appear here.",
+tr_empty:"Enter a tracking number to see its journey here.",tr_bad:"Please enter a valid tracking number (letters, numbers, or hyphens only).",
  st:["Shipment created","Picked up from merchant","Arrived at sorting hub","Out for delivery","Delivered"],
  calc_title:"Shipping cost calculator",calc_sub:"Pick both governorates and weight for an estimated price.",
  from:"From governorate",to:"To governorate",weight:"Weight (kg)",cod:"COD amount (EGP)",fragile:"Fragile parcel (+ special packing)",
@@ -477,23 +476,110 @@ function goTo(el){
   }, 350);
 }
 
-/* ---------- Tracking (demo: status derived from number) ---------- */
-function track(no, silent){
+
+/* ---------- Tracking (Supabase) ---------- */
+const SUPABASE_URL = "https://xdhmjztwsxybddvmaikc.supabase.co";
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_QBRDsg54FJlSEFa1ejz5Yg_6nyUJ65D";
+
+async function track(no, silent = false) {
   const out = $("#trackOut");
-  if(!/^\d{6,}$/.test(no)){ out.innerHTML = `<p style="color:#b91c1c;font-weight:700">${tx("tr_bad")}</p>`; delete out.dataset.last; return; }
+  no = String(no || "").trim();
+
+  if (!/^[A-Za-z0-9-]{1,50}$/.test(no)) {
+    out.innerHTML = `<p style="color:#b91c1c;font-weight:700">${tx("tr_bad")}</p>`;
+    delete out.dataset.last;
+    if (!silent) goTo(out);
+    return;
+  }
+
   out.dataset.last = no;
-  const stage = [...no].reduce((a,c)=>a+ +c,0) % 5;
-  const base = new Date(); base.setDate(base.getDate() - stage);
-  const fmt = i => { const d=new Date(base); d.setDate(d.getDate()+i); return d.toLocaleDateString(lang==="ar"?"ar-EG":"en-GB",{day:"numeric",month:"short"}); };
-  out.innerHTML = `<span class="badge">${tx("tr_status")}: ${tx("st")[stage]}</span>
-    <p dir="ltr" style="text-align:start;font-weight:800;margin-bottom:14px">#${no}</p>
-    <ul class="timeline">${tx("st").map((s,i)=>`<li class="${i<stage?"done":i===stage?"done now":""}"><b>${s}</b>${i<=stage?fmt(i):"—"}</li>`).join("")}</ul>`;
-  if(!silent) goTo(out);
+  out.textContent = lang === "ar"
+    ? "جاري البحث عن الشحنة..."
+    : "Searching for shipment...";
+
+  if (!silent) goTo(out);
+
+  try {
+    const response = await fetch(
+      `${SUPABASE_URL}/rest/v1/rpc/track_shipment`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "apikey": SUPABASE_PUBLISHABLE_KEY,
+          "Authorization": `Bearer ${SUPABASE_PUBLISHABLE_KEY}`
+        },
+        body: JSON.stringify({ p_tracking_number: no })
+      }
+    );
+
+    if (!response.ok) throw new Error("Tracking request failed");
+
+    const data = await response.json();
+
+    if (!data || !data.found) {
+      out.textContent = lang === "ar"
+        ? "لم يتم العثور على شحنة بهذا الرقم."
+        : "No shipment was found with this tracking number.";
+      return;
+    }
+
+    const safe = value => String(value ?? "").replace(/[&<>"']/g, ch => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;"
+    })[ch]);
+
+    const events = Array.isArray(data.events) ? data.events : [];
+
+    out.innerHTML = `
+      <span class="badge">${safe(tx("tr_status"))}: ${safe(data.status || "—")}</span>
+      <p dir="ltr" style="text-align:start;font-weight:800;margin-bottom:14px">
+        #${safe(data.tracking_number || no)}
+      </p>
+      ${
+        events.length
+          ? `<ul class="timeline">
+              ${events.map(event => `
+                <li class="done">
+                  <b>${safe(event.status || "—")}</b>
+                  <span>${safe(event.created_at
+                    ? new Date(event.created_at).toLocaleString(
+                        lang === "ar" ? "ar-EG" : "en-GB"
+                      )
+                    : "—")}</span>
+                </li>
+              `).join("")}
+            </ul>`
+          : `<p>${lang === "ar"
+              ? "لا توجد تحديثات مسجلة لهذه الشحنة حتى الآن."
+              : "No updates have been recorded for this shipment yet."}</p>`
+      }
+    `;
+
+  } catch (error) {
+    console.error("Tracking error:", error);
+    out.textContent = lang === "ar"
+      ? "تعذر الاتصال بخدمة التتبع. حاول مرة أخرى."
+      : "Could not connect to tracking. Please try again.";
+  }
+
+  if (!silent) goTo(out);
 }
-$("#trackForm").addEventListener("submit",e=>{e.preventDefault();track($("#trackNo").value.trim());});
-$("#heroTrack").addEventListener("submit",e=>{
-  e.preventDefault(); const v=$("#heroInput").value.trim(); $("#trackNo").value=v;
-  track(v,true); goTo($("#trackOut"));
+
+$("#trackForm").addEventListener("submit", e => {
+  e.preventDefault();
+  track($("#trackNo").value);
+});
+
+$("#heroTrack").addEventListener("submit", e => {
+  e.preventDefault();
+  const value = $("#heroInput").value.trim();
+  $("#trackNo").value = value;
+  track(value, true);
+  goTo($("#trackOut"));
 });
 
 /* ---------- Forms (front-end only: connect to your backend/API) ---------- */
