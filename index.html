@@ -501,7 +501,8 @@ async function track(no, silent = false) {
 
   try {
     const response = await fetch(
-      `${SUPABASE_URL}/rest/v1/rpc/track_shipment`,
+
+`${SUPABASE_URL}/functions/v1/track`,
       {
         method: "POST",
         headers: {
@@ -509,9 +510,10 @@ async function track(no, silent = false) {
           "apikey": SUPABASE_PUBLISHABLE_KEY,
           "Authorization": `Bearer ${SUPABASE_PUBLISHABLE_KEY}`
         },
-        body: JSON.stringify({ p_tracking_number: no })
+        body: JSON.stringify({ tracking_number: no })
       }
     );
+
 
     if (!response.ok) throw new Error("Tracking request failed");
 
